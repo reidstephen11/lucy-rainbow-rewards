@@ -3,20 +3,29 @@
 
   const STORAGE_KEY = 'lucy-rainbow-checkpoint';
   const TOTAL_CHECKPOINTS = 7;
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const TRAVEL_MS = 800;
-  const POPUP_MS = 2800;
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  const ARC_CX = 200;
+  const ARC_CY = 220;
+  const LABEL_R = 200;
+  const POT_OFFSET_X = 14;
+  const POT_OFFSET_Y = -14;
 
   const centerPath = document.getElementById('center-path');
   const checkpointsGroup = document.getElementById('checkpoints');
+  const dayLabelsGroup = document.getElementById('day-labels');
   const avatar = document.getElementById('avatar');
   const avatarImage = document.getElementById('avatar-image');
   const avatarFallback = document.getElementById('avatar-fallback');
+  const pot = document.getElementById('pot');
+  const potAnchor = document.getElementById('pot-anchor');
   const progressLabel = document.getElementById('progress');
   const progressFill = document.getElementById('progress-fill');
   const doneBtn = document.getElementById('done-btn');
   const resetBtn = document.getElementById('reset-btn');
   const confettiHost = document.getElementById('confetti');
-  const rewardPopup = document.getElementById('reward-popup');
 
   // === Path / checkpoint geometry ===
   const pathLength = centerPath.getTotalLength();
@@ -32,16 +41,65 @@
 
   // Draw checkpoint circles
   checkpointPositions.forEach((p, i) => {
-    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    const c = document.createElementNS(SVG_NS, 'circle');
     c.setAttribute('cx', p.x);
     c.setAttribute('cy', p.y);
-    c.setAttribute('r', 9);
+    c.setAttribute('r', 8);
     c.classList.add('checkpoint');
     c.dataset.index = String(i);
     checkpointsGroup.appendChild(c);
   });
 
-  // Avatar fallback only on real load failure
+  // === Day labels (Mon–Sun) ===
+  // Place each label radially outward from the arc centre, tilting Mon and Sun
+  // slightly downward so they don't collide with the pot of gold at the end.
+  function labelAngleDeg(i) {
+    // Upper arc traverses 180° → 360° in SVG (y-down) coords.
+    const base = 180 + (i / (TOTAL_CHECKPOINTS - 1)) * 180;
+    if (i === 0) return 170;                       // Mon: down-left
+    if (i === TOTAL_CHECKPOINTS - 1) return 10;    // Sun: down-right
+    return base;
+  }
+
+  checkpointPositions.forEach((_, i) => {
+    const rad = labelAngleDeg(i) * Math.PI / 180;
+    const lx = ARC_CX + Math.cos(rad) * LABEL_R;
+    const ly = ARC_CY + Math.sin(rad) * LABEL_R;
+
+    const g = document.createElementNS(SVG_NS, 'g');
+    g.classList.add('day-label');
+    g.dataset.index = String(i);
+    g.setAttribute('transform', `translate(${lx}, ${ly})`);
+
+    const pill = document.createElementNS(SVG_NS, 'rect');
+    pill.setAttribute('x', -17);
+    pill.setAttribute('y', -9);
+    pill.setAttribute('width', 34);
+    pill.setAttribute('height', 18);
+    pill.setAttribute('rx', 9);
+    pill.classList.add('day-pill');
+
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', 0);
+    text.setAttribute('y', 0.5);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('dominant-baseline', 'central');
+    text.classList.add('day-text');
+    text.textContent = DAYS[i];
+
+    g.appendChild(pill);
+    g.appendChild(text);
+    dayLabelsGroup.appendChild(g);
+  });
+
+  // === Pot of gold position (always at the end of the rainbow) ===
+  const lastPoint = checkpointPositions[TOTAL_CHECKPOINTS - 1];
+  potAnchor.setAttribute(
+    'transform',
+    `translate(${lastPoint.x + POT_OFFSET_X}, ${lastPoint.y + POT_OFFSET_Y})`
+  );
+
+  // Avatar fallback only on actual load failure
   avatarImage.addEventListener('error', () => {
     avatarImage.style.display = 'none';
     avatarFallback.style.display = '';
@@ -69,34 +127,27 @@
     return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
   }
 
-  function easeOutCubic(t) {
-    return 1 - Math.pow(1 - t, 3);
-  }
-
   function setAvatarAtLength(len) {
     const pt = centerPath.getPointAtLength(len);
     avatar.setAttribute('transform', `translate(${pt.x}, ${pt.y})`);
   }
 
-  // Animate Lucy along the arc from her current length to target
   function travelTo(targetLength, onDone) {
     if (animFrame) cancelAnimationFrame(animFrame);
 
     const start = performance.now();
     const from = currentLength;
-    const to = targetLength;
-    const distance = to - from;
+    const distance = targetLength - from;
 
     function step(now) {
       const t = Math.min(1, (now - start) / TRAVEL_MS);
       const eased = easeOutBack(t);
-      const len = from + distance * eased;
-      setAvatarAtLength(len);
+      setAvatarAtLength(from + distance * eased);
 
       if (t < 1) {
         animFrame = requestAnimationFrame(step);
       } else {
-        currentLength = to;
+        currentLength = targetLength;
         animFrame = null;
         if (onDone) onDone();
       }
@@ -106,13 +157,18 @@
   }
 
   function updateCheckpoints(index) {
-    const dots = checkpointsGroup.querySelectorAll('.checkpoint');
-    dots.forEach((dot, i) => {
+    checkpointsGroup.querySelectorAll('.checkpoint').forEach((dot, i) => {
       dot.classList.toggle('reached', i <= index);
     });
   }
 
-  function updateProgress(index, animated) {
+  function updateDayLabels(index) {
+    dayLabelsGroup.querySelectorAll('.day-label').forEach((label, i) => {
+      label.classList.toggle('today', i === index);
+    });
+  }
+
+  function updateProgress(index) {
     const total = TOTAL_CHECKPOINTS - 1;
     progressLabel.textContent = `${index} / ${total}`;
     progressFill.style.width = (index / total) * 100 + '%';
@@ -127,24 +183,10 @@
     if (iconEl)  iconEl.textContent  = atEnd ? '🎉' : '✨';
   }
 
-  let popupTimer = null;
-  function showRewardPopup() {
-    rewardPopup.classList.remove('show');
-    void rewardPopup.getBoundingClientRect();
-    rewardPopup.classList.add('show');
-    rewardPopup.setAttribute('aria-hidden', 'false');
-
-    if (popupTimer) clearTimeout(popupTimer);
-    popupTimer = setTimeout(() => {
-      rewardPopup.classList.remove('show');
-      rewardPopup.setAttribute('aria-hidden', 'true');
-    }, POPUP_MS);
-  }
-
-  function hideRewardPopup() {
-    if (popupTimer) clearTimeout(popupTimer);
-    rewardPopup.classList.remove('show');
-    rewardPopup.setAttribute('aria-hidden', 'true');
+  function celebratePot() {
+    pot.classList.remove('celebrate');
+    void pot.getBoundingClientRect();
+    pot.classList.add('celebrate');
   }
 
   function launchConfetti() {
@@ -178,14 +220,15 @@
   }
 
   function celebrate() {
-    showRewardPopup();
+    celebratePot();
     launchConfetti();
     playCheer();
   }
 
-  // Initial paint (no animation)
+  // === Initial render ===
   setAvatarAtLength(currentLength);
   updateCheckpoints(current);
+  updateDayLabels(current);
   updateProgress(current);
   updateButtons(current);
 
@@ -195,6 +238,7 @@
     saveCheckpoint(current);
     updateProgress(current);
     updateButtons(current);
+    updateDayLabels(current);
 
     travelTo(checkpointLengths[current], () => {
       updateCheckpoints(current);
@@ -203,13 +247,12 @@
   });
 
   resetBtn.addEventListener('click', () => {
-    const ok = window.confirm('Reset Lucy back to the start?');
-    if (!ok) return;
+    if (!window.confirm('Reset Lucy back to the start?')) return;
     current = 0;
     saveCheckpoint(current);
-    hideRewardPopup();
     updateProgress(current);
     updateButtons(current);
+    updateDayLabels(current);
     travelTo(checkpointLengths[0], () => {
       updateCheckpoints(current);
     });
