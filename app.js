@@ -2,8 +2,9 @@
   'use strict';
 
   const STORAGE_KEY = 'lucy-rainbow-checkpoint';
-  const TOTAL_CHECKPOINTS = 7;
   const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const TOTAL_POSITIONS = 8;          // 0 = start (before Monday), 1–7 = Mon–Sun
+  const TOTAL_DAYS = DAYS.length;     // 7
   const TRAVEL_MS = 800;
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -27,48 +28,53 @@
   const resetBtn = document.getElementById('reset-btn');
   const confettiHost = document.getElementById('confetti');
 
-  // === Path / checkpoint geometry ===
+  // === Path geometry ===
+  // 8 evenly-spaced positions along the rainbow.
+  // Position 0 is the starting line (before Monday); positions 1–7 are the days.
   const pathLength = centerPath.getTotalLength();
-  const checkpointLengths = [];
-  const checkpointPositions = [];
-  for (let i = 0; i < TOTAL_CHECKPOINTS; i++) {
-    const t = i / (TOTAL_CHECKPOINTS - 1);
+  const positionLengths = [];
+  const positionPoints = [];
+  for (let i = 0; i < TOTAL_POSITIONS; i++) {
+    const t = i / (TOTAL_POSITIONS - 1);
     const len = t * pathLength;
     const pt = centerPath.getPointAtLength(len);
-    checkpointLengths.push(len);
-    checkpointPositions.push({ x: pt.x, y: pt.y });
+    positionLengths.push(len);
+    positionPoints.push({ x: pt.x, y: pt.y });
   }
 
-  // Draw checkpoint circles
-  checkpointPositions.forEach((p, i) => {
+  // Draw a checkpoint dot for each day (positions 1–7). Position 0 has no dot —
+  // Lucy just sits there at the start of the rainbow before any day is done.
+  for (let i = 1; i < TOTAL_POSITIONS; i++) {
+    const p = positionPoints[i];
     const c = document.createElementNS(SVG_NS, 'circle');
     c.setAttribute('cx', p.x);
     c.setAttribute('cy', p.y);
     c.setAttribute('r', 8);
     c.classList.add('checkpoint');
-    c.dataset.index = String(i);
+    c.dataset.dayIndex = String(i - 1); // 0 = Mon, …, 6 = Sun
     checkpointsGroup.appendChild(c);
-  });
+  }
 
-  // === Day labels (Mon–Sun) ===
-  // Place each label radially outward from the arc centre, tilting Mon and Sun
-  // slightly downward so they don't collide with the pot of gold at the end.
-  function labelAngleDeg(i) {
-    // Upper arc traverses 180° → 360° in SVG (y-down) coords.
-    const base = 180 + (i / (TOTAL_CHECKPOINTS - 1)) * 180;
-    if (i === 0) return 170;                       // Mon: down-left
-    if (i === TOTAL_CHECKPOINTS - 1) return 10;    // Sun: down-right
+  // === Day labels (Mon–Sun at positions 1–7) ===
+  // Radially outward from the arc centre. Tilt Sun's label down so it doesn't
+  // sit underneath the pot of gold at the end of the rainbow.
+  function labelAngleDeg(dayIndex) {
+    // Position index along the arc = dayIndex + 1 (since 0 is the start).
+    const posIndex = dayIndex + 1;
+    const t = posIndex / (TOTAL_POSITIONS - 1);
+    const base = 180 + t * 180; // upper arc: 180° → 360° in SVG (y-down) coords
+    if (dayIndex === TOTAL_DAYS - 1) return 10;   // Sun: tilt down-right
     return base;
   }
 
-  checkpointPositions.forEach((_, i) => {
-    const rad = labelAngleDeg(i) * Math.PI / 180;
+  DAYS.forEach((day, dayIndex) => {
+    const rad = labelAngleDeg(dayIndex) * Math.PI / 180;
     const lx = ARC_CX + Math.cos(rad) * LABEL_R;
     const ly = ARC_CY + Math.sin(rad) * LABEL_R;
 
     const g = document.createElementNS(SVG_NS, 'g');
     g.classList.add('day-label');
-    g.dataset.index = String(i);
+    g.dataset.dayIndex = String(dayIndex);
     g.setAttribute('transform', `translate(${lx}, ${ly})`);
 
     const pill = document.createElementNS(SVG_NS, 'rect');
@@ -85,7 +91,7 @@
     text.setAttribute('text-anchor', 'middle');
     text.setAttribute('dominant-baseline', 'central');
     text.classList.add('day-text');
-    text.textContent = DAYS[i];
+    text.textContent = day;
 
     g.appendChild(pill);
     g.appendChild(text);
@@ -93,10 +99,10 @@
   });
 
   // === Pot of gold position (always at the end of the rainbow) ===
-  const lastPoint = checkpointPositions[TOTAL_CHECKPOINTS - 1];
+  const endPoint = positionPoints[TOTAL_POSITIONS - 1];
   potAnchor.setAttribute(
     'transform',
-    `translate(${lastPoint.x + POT_OFFSET_X}, ${lastPoint.y + POT_OFFSET_Y})`
+    `translate(${endPoint.x + POT_OFFSET_X}, ${endPoint.y + POT_OFFSET_Y})`
   );
 
   // Avatar fallback only on actual load failure
@@ -106,15 +112,17 @@
   });
 
   // === State ===
+  // `current` is the position index (0–7). 0 = start, 7 = pot of gold.
+  // Days completed = current (so 0 means none done, 7 means all 7 done).
   let current = loadCheckpoint();
-  let currentLength = checkpointLengths[current];
+  let currentLength = positionLengths[current];
   let animFrame = null;
 
   function loadCheckpoint() {
     const raw = localStorage.getItem(STORAGE_KEY);
     const n = parseInt(raw, 10);
     if (!Number.isFinite(n)) return 0;
-    return Math.max(0, Math.min(TOTAL_CHECKPOINTS - 1, n));
+    return Math.max(0, Math.min(TOTAL_POSITIONS - 1, n));
   }
 
   function saveCheckpoint(n) {
@@ -156,26 +164,31 @@
     animFrame = requestAnimationFrame(step);
   }
 
-  function updateCheckpoints(index) {
-    checkpointsGroup.querySelectorAll('.checkpoint').forEach((dot, i) => {
-      dot.classList.toggle('reached', i <= index);
+  // `position` is the current path position (0–7). Days completed = position.
+  function updateCheckpoints(position) {
+    // Each checkpoint dot is a day (1 = Mon … 7 = Sun). Mark it reached once
+    // Lucy has actually landed on it.
+    checkpointsGroup.querySelectorAll('.checkpoint').forEach((dot) => {
+      const dayIndex = parseInt(dot.dataset.dayIndex, 10);
+      dot.classList.toggle('reached', dayIndex + 1 <= position);
     });
   }
 
-  function updateDayLabels(index) {
-    dayLabelsGroup.querySelectorAll('.day-label').forEach((label, i) => {
-      label.classList.toggle('today', i === index);
+  function updateDayLabels(position) {
+    // Highlight the most recently completed day; nothing highlighted at start.
+    dayLabelsGroup.querySelectorAll('.day-label').forEach((label) => {
+      const dayIndex = parseInt(label.dataset.dayIndex, 10);
+      label.classList.toggle('today', dayIndex + 1 === position);
     });
   }
 
-  function updateProgress(index) {
-    const total = TOTAL_CHECKPOINTS - 1;
-    progressLabel.textContent = `${index} / ${total}`;
-    progressFill.style.width = (index / total) * 100 + '%';
+  function updateProgress(position) {
+    progressLabel.textContent = `${position} / ${TOTAL_DAYS}`;
+    progressFill.style.width = (position / TOTAL_DAYS) * 100 + '%';
   }
 
-  function updateButtons(index) {
-    const atEnd = index >= TOTAL_CHECKPOINTS - 1;
+  function updateButtons(position) {
+    const atEnd = position >= TOTAL_POSITIONS - 1;
     doneBtn.disabled = atEnd;
     const labelEl = doneBtn.querySelector('.btn-label');
     const iconEl = doneBtn.querySelector('.btn-icon');
@@ -233,16 +246,16 @@
   updateButtons(current);
 
   doneBtn.addEventListener('click', () => {
-    if (current >= TOTAL_CHECKPOINTS - 1) return;
+    if (current >= TOTAL_POSITIONS - 1) return;
     current += 1;
     saveCheckpoint(current);
     updateProgress(current);
     updateButtons(current);
     updateDayLabels(current);
 
-    travelTo(checkpointLengths[current], () => {
+    travelTo(positionLengths[current], () => {
       updateCheckpoints(current);
-      if (current >= TOTAL_CHECKPOINTS - 1) celebrate();
+      if (current >= TOTAL_POSITIONS - 1) celebrate();
     });
   });
 
@@ -253,7 +266,7 @@
     updateProgress(current);
     updateButtons(current);
     updateDayLabels(current);
-    travelTo(checkpointLengths[0], () => {
+    travelTo(positionLengths[0], () => {
       updateCheckpoints(current);
     });
   });
